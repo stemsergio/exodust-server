@@ -1,0 +1,28 @@
+# Build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/server
+
+# Test and profiling output
+*.test
+*.out
+coverage.*
+*.prof
+
+# Local environment and secrets (secrets belong in ../Secrets, never here)
+.env
+*.env
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings (personal, not shared)
+.claude/settings.local.json
