@@ -16,7 +16,6 @@ type Input struct {
 // State is passed and returned by value, so the caller's copy is never mutated.
 func Tick(s State, inputs []Input) State {
 	s.Counter++
-
 	for _, input := range inputs {
 		switch input.KInput {
 		case "w":
@@ -27,7 +26,6 @@ func Tick(s State, inputs []Input) State {
 			s.PlayerX--
 		case "d":
 			s.PlayerX++
-
 		}
 	}
 	return s
