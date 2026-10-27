@@ -2,8 +2,9 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -14,42 +15,85 @@ import (
 const tickRate = 2 // ticks per second
 
 func main() {
-	state := sim.State{}
+	secret, err := loadSecret()
+	if err != nil {
+		log.Fatal(err)
+	}
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
-	ticker := time.NewTicker(time.Second / tickRate)
-	//scanner := bufio.NewScanner(os.Stdin)//no cause it blocks ticks
-	defer ticker.Stop()
+	s := &server{
+		secret:  secret,
+		origins: strings.Split(os.Getenv("ALLOWED_ORIGINS"), ","),
+		inputs:  make(chan sim.Input, 1024),
+		join:    make(chan *client),
+		leave:   make(chan *client),
+	}
 
-	inputChan := make(chan sim.Input, 1024)
-	inputs := []sim.Input{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWS)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	})
 
 	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			for _, key := range strings.Fields(scanner.Text()) {
-				inputChan <- sim.Input{KInput: key}
-			}
-		}
+		log.Printf("listening on :%s", port)
+		log.Fatal(http.ListenAndServe(":"+port, mux))
 	}()
 
-	// Only this goroutine touches state. Wall-clock time lives here, never in sim.
-	for range ticker.C {
-		if state.Counter%30 == 0 {
-			fmt.Println("world state", state.Counter)
-		}
-		// Drain everything queued since the last tick, without waiting.
-		for drained := false; !drained; {
-			select {
-			case in := <-inputChan:
-				inputs = append(inputs, in)
-			default:
-				drained = true
+	s.run()
+}
+
+// run is the only goroutine that touches state and the client list.
+func (s *server) run() {
+	state := sim.State{}
+	clients := map[*client]bool{}
+	var inputs []sim.Input
+
+	ticker := time.NewTicker(time.Second / tickRate)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case c := <-s.join:
+			clients[c] = true
+			log.Printf("player %s connected (%d online)", c.userID, len(clients))
+
+		case c := <-s.leave:
+			delete(clients, c)
+			close(c.send) // only the sender closes a channel
+			log.Printf("player %s left (%d online)", c.userID, len(clients))
+
+		case <-ticker.C:
+			var lines []string
+			if state.Counter%30 == 0 {
+				lines = append(lines, fmt.Sprintf("world state %d", state.Counter))
+			}
+
+			// Drain everything queued since the last tick, without waiting.
+			for drained := false; !drained; {
+				select {
+				case in := <-s.inputs:
+					inputs = append(inputs, in)
+				default:
+					drained = true
+				}
+			}
+			state = sim.Tick(state, inputs)
+			inputs = inputs[:0]
+
+			lines = append(lines, fmt.Sprintf("state %d %d", state.PlayerX, state.PlayerY))
+			for _, line := range lines {
+				fmt.Println(line)
+				for c := range clients {
+					select {
+					case c.send <- line:
+					default: // slow client: drop the line instead of freezing the world
+					}
+				}
 			}
 		}
-
-		state = sim.Tick(state, inputs)
-		fmt.Println("state", state.PlayerX, state.PlayerY)
-		// Reuse the slice's backing array on the next tick.
-		inputs = inputs[:0]
 	}
 }
